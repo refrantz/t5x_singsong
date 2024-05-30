@@ -1298,6 +1298,20 @@ def beam_search(
         & (~none_pass_min_prob_check)
         & (~exceed_max_decode_step)
     )
+  
+  def set_token_range_based_on_index(cur_index, logits):
+    # Define the conditions for semantic vs. acoustical tokens.
+    def semantic_tokens():
+        return jnp.where(jnp.arange(logits.shape[-1]) < 1024, logits, -float('inf'))
+
+    def acoustical_tokens():
+        acoustical_position = (cur_index - 500) % 4
+        start = 1024 + 1024 * acoustical_position
+        end = start + 1024
+        mask = (jnp.arange(logits.shape[-1]) >= start) & (jnp.arange(logits.shape[-1]) < end)
+        return jnp.where(mask, logits, -float('inf'))
+
+    return jax.lax.cond(cur_index < 500, semantic_tokens, acoustical_tokens)
 
   def beam_search_loop_body_fn(state: BeamState) -> BeamState:
     """Beam search loop state update function."""
@@ -1335,6 +1349,8 @@ def beam_search(
         lambda x: unflatten_beam_dim(x, batch_size, beam_size, cache_offset),
         new_flat_cache,
     )
+
+    logits = set_token_range_based_on_index(state.cur_index, logits)
 
     # Gather log probabilities from logits
     candidate_log_probs = jax.nn.log_softmax(logits)
